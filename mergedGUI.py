@@ -1,25 +1,33 @@
 import cv2
 import mediapipe as mp
 import serial
-import threading
-import tkinter
-import customtkinter
 import time
 
-# ------------------------------ #
-#  SERIAL SETUP
-# ------------------------------ #
-arduino = serial.Serial(port='COM3', baudrate=115200, timeout=1)
+# ----------------------------------------
+# 1. SERIAL SETUP (WINDOWS)
+# ----------------------------------------
 
-def send_to_arduino(value):
-    """Sends a number + delimiter to Arduino."""
-    msg = f"{int(value)};"
-    arduino.write(msg.encode('utf-8'))
+# Change COM6 to whatever your Arduino shows in Device Manager
+try:
+    arduino = serial.Serial('COM6', 115200, timeout=1)
+    print("Connected to Arduino on COM6")
+except:
+    print("ERROR: Could not open COM6")
+    exit()
+
+time.sleep(2)   # Allow Arduino to reset
+
+def send_to_arduino(angle):
+    """Send angle as bytes + ';' delimiter."""
+    arduino.write(bytes(str(int(angle)), "utf-8"))
+    arduino.write(b';')
+    print("Sent to Arduino:", angle)
 
 
-# ------------------------------ #
-#  MEDIAPIPE SETUP
-# ------------------------------ #
+# ----------------------------------------
+# 2. HAND TRACKING SETUP
+# ----------------------------------------
+
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     max_num_hands=1,
@@ -28,11 +36,12 @@ hands = mp_hands.Hands(
 )
 mp_draw = mp.solutions.drawing_utils
 
+
 def count_fingers(hand_landmarks):
-    """Returns number of extended fingers."""
-    finger_tip_ids = [8, 12, 16, 20]  # Index, middle, ring, pinky tips
+    finger_tip_ids = [8, 12, 16, 20]
     count = 0
 
+    # Four fingers (not thumb)
     for tip_id in finger_tip_ids:
         tip = hand_landmarks.landmark[tip_id]
         pip = hand_landmarks.landmark[tip_id - 2]
@@ -48,84 +57,43 @@ def count_fingers(hand_landmarks):
     return count
 
 
-# ------------------------------ #
-#  HAND TRACKING THREAD
-# ------------------------------ #
-def hand_tracking_thread():
-    cap = cv2.VideoCapture(0)
+# ----------------------------------------
+# 3. START VIDEO LOOP
+# ----------------------------------------
 
-    last_sent = -1   # Avoid sending the same value over and over
+cap = cv2.VideoCapture(0)
+last_sent_angle = None
 
-    while True:
-        success, frame = cap.read()
-        if not success:
-            continue
+while True:
+    success, frame = cap.read()
+    if not success:
+        break
 
-        frame = cv2.flip(frame, 1)
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = hands.process(rgb)
+    frame = cv2.flip(frame, 1)
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(rgb_frame)
 
-        if results.multi_hand_landmarks:
-            for hand_landmarks in results.multi_hand_landmarks:
+    if results.multi_hand_landmarks:
+        for hand_landmarks in results.multi_hand_landmarks:
+            mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
-                # Draw hand skeleton
-                mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            finger_count = count_fingers(hand_landmarks)
 
-                # Count fingers
-                fingers = count_fingers(hand_landmarks)
+            # Map finger count (0–5) to servo angle (0–180)
+            angle = int((finger_count / 5) * 180)
 
-                # Update GUI label (thread-safe using after)
-                app.after(0, lambda f=fingers: label_fingers.configure(text=f"Fingers: {f}"))
+            cv2.putText(frame, f'Fingers: {finger_count}', (10, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 
-                # Send to Arduino (only when changed)
-                if fingers != last_sent:
-                    send_to_arduino(fingers)
-                    last_sent = fingers
+            if angle != last_sent_angle:
+                send_to_arduino(angle)
+                last_sent_angle = angle
 
-        cv2.imshow("Hand Tracking - press q to close", frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+    cv2.imshow("Hand Control Servo", frame)
 
-    cap.release()
-    cv2.destroyAllWindows()
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
-
-# ------------------------------ #
-#  GUI SETUP
-# ------------------------------ #
-customtkinter.set_appearance_mode("System")
-customtkinter.set_default_color_theme("blue")
-
-app = customtkinter.CTk()
-app.geometry("800x480")
-app.title("Merged Hand Tracking + Servo GUI")
-
-servo_value = 0
-
-def slider_event(value):
-    global servo_value
-    servo_value = int(value)
-    label_slider.configure(text=f"Slider Angle: {servo_value}")
-    send_to_arduino(servo_value)
-
-# Labels
-label_slider = customtkinter.CTkLabel(app, text="Slider Angle: 0")
-label_slider.place(relx=0.1, rely=0.15)
-
-label_fingers = customtkinter.CTkLabel(app, text="Fingers: 0")
-label_fingers.place(relx=0.1, rely=0.25)
-
-# Slider Widget
-slider = customtkinter.CTkSlider(app, from_=0, to=180, command=slider_event, width=480)
-slider.place(relx=0.5, rely=0.35, anchor=tkinter.CENTER)
-
-# ------------------------------ #
-#  START HAND TRACKING THREAD
-# ------------------------------ #
-thread = threading.Thread(target=hand_tracking_thread, daemon=True)
-thread.start()
-
-# ------------------------------ #
-#  START GUI (MAIN THREAD)
-# ------------------------------ #
-app.mainloop()
+cap.release()
+arduino.close()
+cv2.destroyAllWindows()
