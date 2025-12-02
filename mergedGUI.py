@@ -4,17 +4,9 @@ import serial
 import time
 
 # ----------------------------------------
-# 1. SERIAL SETUP (WINDOWS)
+# 1. SERIAL SETUP
 # ----------------------------------------
-
-# Change COM6 to whatever your Arduino shows in Device Manager
-try:
-    arduino = serial.Serial('COM6', 115200, timeout=1)
-    print("Connected to Arduino on COM6")
-except:
-    print("ERROR: Could not open COM6")
-    exit()
-
+arduino = serial.Serial('/dev/cu.usbmodem101', 115200, timeout=1)
 time.sleep(2)   # Allow Arduino to reset
 
 def send_to_arduino(angle):
@@ -23,11 +15,9 @@ def send_to_arduino(angle):
     arduino.write(b';')
     print("Sent to Arduino:", angle)
 
-
 # ----------------------------------------
 # 2. HAND TRACKING SETUP
 # ----------------------------------------
-
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     max_num_hands=1,
@@ -36,15 +26,15 @@ hands = mp_hands.Hands(
 )
 mp_draw = mp.solutions.drawing_utils
 
-
 def count_fingers(hand_landmarks):
     finger_tip_ids = [8, 12, 16, 20]
     count = 0
 
-    # Four fingers (not thumb)
+    # Count 4 fingers (excluding thumb)
     for tip_id in finger_tip_ids:
         tip = hand_landmarks.landmark[tip_id]
         pip = hand_landmarks.landmark[tip_id - 2]
+
         if tip.y < pip.y:
             count += 1
 
@@ -56,12 +46,11 @@ def count_fingers(hand_landmarks):
 
     return count
 
-
 # ----------------------------------------
 # 3. START VIDEO LOOP
 # ----------------------------------------
-
 cap = cv2.VideoCapture(0)
+
 last_sent_angle = None
 
 while True:
@@ -76,7 +65,6 @@ while True:
     if results.multi_hand_landmarks:
         for hand_landmarks in results.multi_hand_landmarks:
             mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-
             finger_count = count_fingers(hand_landmarks)
 
             # Map finger count (0–5) to servo angle (0–180)
@@ -85,6 +73,7 @@ while True:
             cv2.putText(frame, f'Fingers: {finger_count}', (10, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 
+            # Only send if angle changed (prevents spam)
             if angle != last_sent_angle:
                 send_to_arduino(angle)
                 last_sent_angle = angle
